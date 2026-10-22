@@ -1,5 +1,6 @@
-const jwt = require("jsonwebtoken");
 const User = require("../models/userModel");
+const { verifyAuthToken } = require("../utils/authTokens");
+const { isObjectId } = require("./securityMiddleware");
 
 const authMiddleware = async (req, res, next) => {
     try {
@@ -7,28 +8,50 @@ const authMiddleware = async (req, res, next) => {
 
         if (!authHeader) {
             return res.status(401).json({
+                success: false,
                 message: "Authorization token is required",
             });
         }
 
-        const token = authHeader.split(" ")[1];
+        const match = /^Bearer\s+([^\s]+)$/i.exec(authHeader);
 
-        if (!token) {
+        if (!match) {
             return res.status(401).json({
+                success: false,
                 message: "Invalid authorization format",
             });
         }
 
-        const decodedToken = jwt.verify(
-            token,
-            process.env.JWT_TOKEN
+        const decodedToken = verifyAuthToken(match[1]);
+
+        if (!isObjectId(String(decodedToken.userId || ""))) {
+            return res.status(401).json({
+                success: false,
+                message: "Invalid token",
+            });
+        }
+
+        const user = await User.findById(decodedToken.userId).select(
+            "-password"
         );
 
-        const user = await User.findById(decodedToken.userId).select("-password");
-
+        // A deleted account must not keep a valid session alive.
         if (!user) {
-            return res.status(404).json({
-                message: "User not found",
+            return res.status(401).json({
+                success: false,
+                message: "Session is no longer valid",
+            });
+        }
+
+        // Password changes bump the user's token version. Rejecting older
+        // tokens signs out every other device without a session table.
+        if (
+            (Number(decodedToken.ver) || 0) !==
+            (Number(user.tokenVersion) || 0)
+        ) {
+            return res.status(401).json({
+                success: false,
+                message: "Session is no longer valid",
             });
         }
 
@@ -38,12 +61,14 @@ const authMiddleware = async (req, res, next) => {
     } catch (error) {
         if (error.name === "JsonWebTokenError") {
             return res.status(401).json({
+                success: false,
                 message: "Invalid token",
             });
         }
 
         if (error.name === "TokenExpiredError") {
             return res.status(401).json({
+                success: false,
                 message: "Token has expired",
             });
         }

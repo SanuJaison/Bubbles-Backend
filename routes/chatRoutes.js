@@ -12,11 +12,17 @@ const {
     updateGroupPermissions,
     leaveGroup,
     deleteGroup,
-    reportChat
+    reportChat,
 } = require("../controllers/chatController");
 const authMiddleware = require("../middleware/authMiddleware");
-const upload = require("../middleware/uploadMiddleware");
+const { groupAvatarUpload } = require("../middleware/uploadMiddleware");
+const { uploadLimiter } = require("../middleware/rateLimiters");
+const { objectIdParam, sanitizeRequest } = require("../middleware/securityMiddleware");
+
 const chatRoutes = express.Router();
+
+chatRoutes.param("chatId", objectIdParam("chat"));
+chatRoutes.param("userId", objectIdParam("user"));
 
 chatRoutes.post("/", authMiddleware, createOrGetChat);
 
@@ -25,7 +31,9 @@ chatRoutes.get("/", authMiddleware, getMyChats);
 chatRoutes.post(
     "/group",
     authMiddleware,
-    upload.single("avatar"),
+    uploadLimiter,
+    groupAvatarUpload,
+    sanitizeRequest,
     createGroup
 );
 
@@ -34,7 +42,9 @@ chatRoutes.get("/:chatId", authMiddleware, getChatById);
 chatRoutes.patch(
     "/:chatId/group",
     authMiddleware,
-    upload.single("avatar"),
+    uploadLimiter,
+    groupAvatarUpload,
+    sanitizeRequest,
     updateGroup
 );
 

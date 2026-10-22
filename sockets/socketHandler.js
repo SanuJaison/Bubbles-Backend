@@ -1,6 +1,8 @@
+const mongoose = require("mongoose");
 const User = require("../models/userModel");
 const Chat = require("../models/chatModel");
 const Message = require("../models/messageModel");
+const { isObjectId } = require("../middleware/securityMiddleware");
 
 const onlineUsers = new Map();
 const typingUsers = new Map();
@@ -21,6 +23,44 @@ const groupCalls = new Map();
 const getUserRoom = (userId) => {
     return `user:${userId.toString()}`;
 };
+
+// Socket rooms are not a security boundary on their own: anyone who knows a
+// chat id could otherwise join it and receive typing/message metadata.
+const canAccessChat = async (chatId, userId) => {
+    const value = String(chatId || "");
+
+    if (!isObjectId(value) || !isObjectId(String(userId || ""))) {
+        return false;
+    }
+
+    const chat = await Chat.exists({
+        _id: value,
+        participants: userId,
+    });
+
+    return Boolean(chat);
+};
+
+const getAuthorizedCall = (callId, userId) => {
+    if (!callId) {
+        return null;
+    }
+
+    const call = activeCalls.get(String(callId));
+    const selfId = String(userId);
+
+    if (
+        !call ||
+        (call.callerId !== selfId && call.calleeId !== selfId)
+    ) {
+        return null;
+    }
+
+    return call;
+};
+
+const otherCallParticipant = (call, userId) =>
+    call.callerId === String(userId) ? call.calleeId : call.callerId;
 
 const getGroupCallForChat = (chatId) => {
     const roomId = chatId.toString();
@@ -509,25 +549,58 @@ const syncUndeliveredMessages = async (io, userId) => {
 
 const socketHandler = (io) => {
 
-    User.updateMany(
-        {},
-        {
-            isOnline: false,
-            lastSeen: new Date(),
-        }
-    ).catch((error) => {
+    const resetOnlineUsers = () => {
+        User.updateMany(
+            {},
+            {
+                isOnline: false,
+                lastSeen: new Date(),
+            }
+        ).catch((error) => {
 
-        console.error(
-            "Error resetting online users:",
-            error
-        );
+            console.error(
+                "Error resetting online users:",
+                error
+            );
 
-    });
+        });
+    };
+
+    // `socketHandler` is wired before the async Mongo connection resolves.
+    // Wait for it, otherwise Mongoose buffers this startup cleanup and logs a
+    // timeout error even though the app is healthy.
+    if (mongoose.connection.readyState === 1) {
+        resetOnlineUsers();
+    } else {
+        mongoose.connection.once("connected", resetOnlineUsers);
+    }
 
     io.on("connection", async (socket) => {
 
         const userId =
             socket.userId.toString();
+
+        // A tiny per-socket budget stops a compromised client from flooding
+        // signalling/typing events without needing a DB lookup per event.
+        const eventBuckets = new Map();
+
+        const allowEvent = (name, limit, windowMs = 10000) => {
+            const now = Date.now();
+            const bucket = eventBuckets.get(name) || {
+                startedAt: now,
+                count: 0,
+            };
+
+            if (now - bucket.startedAt >= windowMs) {
+                bucket.startedAt = now;
+                bucket.count = 0;
+            }
+
+            bucket.count += 1;
+            eventBuckets.set(name, bucket);
+
+            return bucket.count <= limit;
+        };
 
         console.log(
             "Socket connected:",
@@ -569,7 +642,7 @@ const socketHandler = (io) => {
                         : new Date(),
                 },
                 {
-                    new: true,
+                    returnDocument: "after",
                 }
             );
 
@@ -661,7 +734,11 @@ const socketHandler = (io) => {
 
         socket.on("joinChat", async (chatId) => {
 
-            if (!chatId) {
+            if (
+                !chatId ||
+                !allowEvent("joinChat", 30) ||
+                !(await canAccessChat(chatId, userId))
+            ) {
                 return;
             }
 
@@ -749,7 +826,7 @@ const socketHandler = (io) => {
 
         socket.on("leaveChat", async (chatId) => {
 
-            if (!chatId) {
+            if (!chatId || !isObjectId(String(chatId))) {
                 return;
             }
 
@@ -779,7 +856,11 @@ const socketHandler = (io) => {
 
         socket.on("typing", async (chatId) => {
 
-            if (!chatId) {
+            if (
+                !chatId ||
+                !allowEvent("typing", 40) ||
+                !(await canAccessChat(chatId, userId))
+            ) {
                 return;
             }
 
@@ -794,7 +875,7 @@ const socketHandler = (io) => {
 
         socket.on("stopTyping", async (chatId) => {
 
-            if (!chatId) {
+            if (!chatId || !isObjectId(String(chatId))) {
                 return;
             }
 
@@ -809,7 +890,11 @@ const socketHandler = (io) => {
 
         socket.on("recording", async (chatId) => {
 
-            if (!chatId) {
+            if (
+                !chatId ||
+                !allowEvent("recording", 20) ||
+                !(await canAccessChat(chatId, userId))
+            ) {
                 return;
             }
 
@@ -823,7 +908,7 @@ const socketHandler = (io) => {
 
         socket.on("stopRecording", async (chatId) => {
 
-            if (!chatId) {
+            if (!chatId || !isObjectId(String(chatId))) {
                 return;
             }
 
@@ -888,13 +973,36 @@ const socketHandler = (io) => {
 
             const { toUserId, chatId, callType, callId } = payload;
 
-            if (!toUserId || !callId) {
+            if (
+                !toUserId ||
+                !chatId ||
+                !callId ||
+                typeof callId !== "string" ||
+                callId.length > 100 ||
+                !isObjectId(String(toUserId)) ||
+                !isObjectId(String(chatId)) ||
+                !allowEvent("call:start", 8, 60000)
+            ) {
                 return;
             }
 
             const targetId = toUserId.toString();
 
             if (targetId === userId) {
+                return;
+            }
+
+            const chatAllowsCall = await Chat.exists({
+                _id: String(chatId),
+                participants: { $all: [userId, targetId] },
+            });
+
+            if (!chatAllowsCall) {
+                socket.emit("call:failed", {
+                    callId,
+                    reason: "not-member",
+                });
+
                 return;
             }
 
@@ -992,7 +1100,15 @@ const socketHandler = (io) => {
 
         socket.on("call:accept", ({ callId, toUserId } = {}) => {
 
-            if (!callId || !toUserId) {
+            const call = getAuthorizedCall(callId, userId);
+
+            if (
+                !call ||
+                call.calleeId !== userId ||
+                !toUserId ||
+                String(toUserId) !== otherCallParticipant(call, userId) ||
+                !allowEvent("call:signal", 120)
+            ) {
                 return;
             }
 
@@ -1010,7 +1126,14 @@ const socketHandler = (io) => {
 
         socket.on("call:reject", ({ callId, toUserId } = {}) => {
 
-            if (!callId || !toUserId) {
+            const call = getAuthorizedCall(callId, userId);
+
+            if (
+                !call ||
+                call.calleeId !== userId ||
+                !toUserId ||
+                String(toUserId) !== otherCallParticipant(call, userId)
+            ) {
                 return;
             }
 
@@ -1029,17 +1152,24 @@ const socketHandler = (io) => {
 
         socket.on("call:end", ({ callId, toUserId } = {}) => {
 
-            if (!callId) {
+            const call = getAuthorizedCall(callId, userId);
+
+            if (!call) {
                 return;
             }
 
-            if (toUserId) {
-                forwardToUser(toUserId.toString(), "call:ended", {
-                    callId,
-                    fromUserId: userId,
-                    reason: "ended",
-                });
+            if (
+                toUserId &&
+                String(toUserId) !== otherCallParticipant(call, userId)
+            ) {
+                return;
             }
+
+            forwardToUser(otherCallParticipant(call, userId), "call:ended", {
+                callId,
+                fromUserId: userId,
+                reason: "ended",
+            });
 
             socket.to(getUserRoom(userId)).emit("call:ended", {
                 callId,
@@ -1053,7 +1183,15 @@ const socketHandler = (io) => {
 
         socket.on("call:offer", ({ callId, toUserId, sdp } = {}) => {
 
-            if (!callId || !toUserId || !sdp) {
+            const call = getAuthorizedCall(callId, userId);
+
+            if (
+                !call ||
+                !toUserId ||
+                String(toUserId) !== otherCallParticipant(call, userId) ||
+                !sdp ||
+                !allowEvent("call:signal", 120)
+            ) {
                 return;
             }
 
@@ -1067,7 +1205,15 @@ const socketHandler = (io) => {
 
         socket.on("call:answer", ({ callId, toUserId, sdp } = {}) => {
 
-            if (!callId || !toUserId || !sdp) {
+            const call = getAuthorizedCall(callId, userId);
+
+            if (
+                !call ||
+                !toUserId ||
+                String(toUserId) !== otherCallParticipant(call, userId) ||
+                !sdp ||
+                !allowEvent("call:signal", 120)
+            ) {
                 return;
             }
 
@@ -1081,7 +1227,15 @@ const socketHandler = (io) => {
 
         socket.on("call:ice", ({ callId, toUserId, candidate } = {}) => {
 
-            if (!callId || !toUserId || !candidate) {
+            const call = getAuthorizedCall(callId, userId);
+
+            if (
+                !call ||
+                !toUserId ||
+                String(toUserId) !== otherCallParticipant(call, userId) ||
+                !candidate ||
+                !allowEvent("call:signal", 200)
+            ) {
                 return;
             }
 
@@ -1096,7 +1250,13 @@ const socketHandler = (io) => {
         // Lets the other side show a muted badge over the video.
         socket.on("call:mute", ({ callId, toUserId, muted } = {}) => {
 
-            if (!callId || !toUserId) {
+            const call = getAuthorizedCall(callId, userId);
+
+            if (
+                !call ||
+                !toUserId ||
+                String(toUserId) !== otherCallParticipant(call, userId)
+            ) {
                 return;
             }
 
@@ -1181,7 +1341,11 @@ const socketHandler = (io) => {
         const relayGroupSignal = (event, payload = {}) => {
             const { callId, toUserId } = payload;
 
-            if (!callId || !toUserId) {
+            if (
+                !callId ||
+                !toUserId ||
+                !allowEvent("groupCall:signal", 240)
+            ) {
                 return;
             }
 
@@ -1205,7 +1369,14 @@ const socketHandler = (io) => {
         };
 
         socket.on("groupCall:start", async ({ chatId, callType, callId } = {}) => {
-            if (!chatId || !callId) {
+            if (
+                !chatId ||
+                !callId ||
+                typeof callId !== "string" ||
+                callId.length > 100 ||
+                !isObjectId(String(chatId)) ||
+                !allowEvent("groupCall:start", 5, 60000)
+            ) {
                 return;
             }
 
@@ -1336,6 +1507,10 @@ const socketHandler = (io) => {
         });
 
         socket.on("groupCall:join", async ({ callId } = {}) => {
+            if (!allowEvent("groupCall:join", 30)) {
+                return;
+            }
+
             const session = callId ? groupCalls.get(callId.toString()) : null;
 
             if (!session) {
@@ -1353,7 +1528,11 @@ const socketHandler = (io) => {
         socket.on("groupCall:decline", ({ callId } = {}) => {
             const session = callId ? groupCalls.get(callId.toString()) : null;
 
-            if (!session || session.initiatorId === userId) {
+            if (
+                !session ||
+                session.initiatorId === userId ||
+                !session.participants.has(userId)
+            ) {
                 return;
             }
 

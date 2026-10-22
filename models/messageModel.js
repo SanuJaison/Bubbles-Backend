@@ -16,7 +16,8 @@ const messageSchema = new mongoose.Schema(
 
         text: {
             type: String,
-            default: ""
+            default: "",
+            maxlength: 10000
         },
 
         replyTo: {
@@ -54,19 +55,24 @@ const messageSchema = new mongoose.Schema(
             {
                 url: {
                     type: String,
-                    required: true
+                    required: true,
+                    maxlength: 2048
                 },
                 name: {
                     type: String,
-                    required: true
+                    required: true,
+                    maxlength: 255
                 },
                 mimeType: {
                     type: String,
-                    required: true
+                    required: true,
+                    maxlength: 120
                 },
                 size: {
                     type: Number,
-                    required: true
+                    required: true,
+                    min: 0,
+                    max: 25 * 1024 * 1024
                 },
                 // Only used by voice notes, so the bubble can show the
                 // length before the audio metadata has loaded.
@@ -78,7 +84,12 @@ const messageSchema = new mongoose.Schema(
                 // draws the same waveform without decoding the audio.
                 waveform: {
                     type: [Number],
-                    default: []
+                    default: [],
+                    validate: {
+                        validator: (values) =>
+                            Array.isArray(values) && values.length <= 64,
+                        message: "Waveform is too long"
+                    }
                 }
             }
         ],

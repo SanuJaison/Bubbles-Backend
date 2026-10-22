@@ -4,6 +4,7 @@ const {
     transcribeAudio,
 } = require("../controllers/aiController");
 const authMiddleware = require("../middleware/authMiddleware");
+const { sanitizeRequest } = require("../middleware/securityMiddleware");
 const {
     chatUpload,
     voiceUpload,
@@ -11,8 +12,14 @@ const {
 
 const aiRoutes = express.Router();
 
-aiRoutes.post("/chat", authMiddleware, chatUpload, chatWithAI);
+aiRoutes.post("/chat", authMiddleware, chatUpload, sanitizeRequest, chatWithAI);
 
-aiRoutes.post("/transcribe", authMiddleware, voiceUpload, transcribeAudio);
+aiRoutes.post(
+    "/transcribe",
+    authMiddleware,
+    voiceUpload,
+    sanitizeRequest,
+    transcribeAudio
+);
 
 module.exports = aiRoutes;

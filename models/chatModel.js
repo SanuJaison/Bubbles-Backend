@@ -18,18 +18,21 @@ const chatSchema = new mongoose.Schema(
         groupName: {
             type: String,
             trim: true,
-            default: ""
+            default: "",
+            maxlength: 80
         },
 
         groupAvatar: {
             type: String,
-            default: ""
+            default: "",
+            maxlength: 2048
         },
 
         groupDescription: {
             type: String,
             trim: true,
-            default: ""
+            default: "",
+            maxlength: 500
         },
 
         // Who can administer the group. The creator is always one of these.

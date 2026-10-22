@@ -7,6 +7,11 @@ const {
     broadcastMessage,
     buildCallPreview
 } = require("../utils/messageHelpers");
+const { isObjectId } = require("../middleware/securityMiddleware");
+const { stripControlChars } = require("../utils/validation");
+
+const MAX_MESSAGE_LENGTH = 10000;
+const MAX_FORWARD_TARGETS = 20;
 
 // Who in this chat has the sender blocked? Those people must never see the
 // message, so it is stored with them in `blockedFor` and treated as unsent.
@@ -61,19 +66,40 @@ const getBlockedByUserIds = async (chat, sender) => {
 
 exports.sendMessage = async (req, res, next) => {
     try {
-        const { chatId, text, messageType, replyTo, duration, waveform } = req.body;
+        const { chatId: rawChatId, text, replyTo, duration, waveform } =
+            req.body;
+        const chatId = String(rawChatId || "");
         const uploadedFiles = req.files || [];
-        const messageText = text?.trim() || "";
+        const messageText =
+            typeof text === "string"
+                ? text.replace(/\u0000/g, "").trim()
+                : "";
 
-        if (!chatId) {
+        if (!isObjectId(chatId)) {
             return res.status(400).json({
-                message: "Chat ID is required"
+                success: false,
+                message: "A valid chat is required"
+            });
+        }
+
+        if (messageText.length > MAX_MESSAGE_LENGTH) {
+            return res.status(400).json({
+                success: false,
+                message: `Messages must be ${MAX_MESSAGE_LENGTH} characters or fewer`
             });
         }
 
         if (!messageText && uploadedFiles.length === 0) {
             return res.status(400).json({
+                success: false,
                 message: "A message or at least one file is required"
+            });
+        }
+
+        if (uploadedFiles.length > 10) {
+            return res.status(400).json({
+                success: false,
+                message: "You can attach up to 10 files at once"
             });
         }
 
@@ -94,6 +120,35 @@ exports.sendMessage = async (req, res, next) => {
             return res.status(403).json({
                 message: "You are not a participant in this chat"
             });
+        }
+
+        let replyToId = null;
+
+        if (replyTo !== undefined && replyTo !== null && replyTo !== "") {
+            const parentId = String(replyTo);
+
+            if (!isObjectId(parentId)) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Invalid message being replied to"
+                });
+            }
+
+            const parentMessage = await Message.findOne({
+                _id: parentId,
+                chat: chat._id,
+                isDeleted: { $ne: true },
+                deletedFor: { $ne: req.user._id },
+            }).select("_id");
+
+            if (!parentMessage) {
+                return res.status(400).json({
+                    success: false,
+                    message: "The message being replied to is not available"
+                });
+            }
+
+            replyToId = parentMessage._id;
         }
 
         // Blocking is one-sided and silent. The blocker can't send, but someone
@@ -165,7 +220,9 @@ exports.sendMessage = async (req, res, next) => {
                     ? "video"
                     : "raw";
 
-            const safeOriginalName = file.originalname.replace(/[^\w.-]/g, "_");
+            const displayName =
+                stripControlChars(file.originalname).slice(0, 255) || "file";
+            const safeOriginalName = displayName.replace(/[^\w.-]/g, "_");
             const fileNameWithoutExtension = safeOriginalName.replace(/\.[^/.]+$/, "");
 
             const publicId = resourceType === "raw"
@@ -192,21 +249,25 @@ exports.sendMessage = async (req, res, next) => {
 
             files.push({
                 url: uploadResult.secure_url,
-                name: file.originalname,
+                name: displayName,
                 mimeType: file.mimetype,
                 size: file.size,
-                duration: isAudio ? Number(duration) || 0 : 0,
+                duration: isAudio
+                    ? Math.min(86400, Math.max(0, Number(duration) || 0))
+                    : 0,
                 waveform: isAudio ? audioWaveform : []
             });
         }
 
+        // The server, not the browser, decides the message kind. This stops a
+        // client from injecting fake system/call bubbles into a chat.
         const finalMessageType = files.length > 0
             ? (files.every((file) => file.mimeType.startsWith("image/"))
                 ? "image"
                 : files.every((file) => file.mimeType.startsWith("audio/"))
                     ? "audio"
                     : "file")
-            : (messageType || "text");
+            : "text";
 
         const message = new Message({
             chat: chatId,
@@ -214,7 +275,7 @@ exports.sendMessage = async (req, res, next) => {
             text: messageText,
             messageType: finalMessageType,
             files,
-            replyTo: replyTo || null,
+            replyTo: replyToId,
             blockedFor: invisibleIds
         });
 
@@ -341,11 +402,13 @@ exports.sendMessage = async (req, res, next) => {
 // normal message so both sides get it live and it survives a refresh.
 exports.logCall = async (req, res, next) => {
     try {
-        const { chatId, callType, status, duration } = req.body;
+        const { chatId: rawChatId, callType, status, duration } = req.body;
+        const chatId = String(rawChatId || "");
 
-        if (!chatId) {
+        if (!isObjectId(chatId)) {
             return res.status(400).json({
-                message: "Chat ID is required"
+                success: false,
+                message: "A valid chat is required"
             });
         }
 
@@ -395,9 +458,9 @@ exports.logCall = async (req, res, next) => {
             ? status
             : "missed";
 
-        const safeDuration = Math.max(
-            0,
-            Math.round(Number(duration) || 0)
+        const safeDuration = Math.min(
+            86400,
+            Math.max(0, Math.round(Number(duration) || 0))
         );
 
         const message = new Message({
@@ -1007,7 +1070,10 @@ exports.deleteMessage = async (req, res, next) => {
 exports.editMessage = async (req, res, next) => {
     try {
         const { messageId } = req.params;
-        const { text } = req.body;
+        const text =
+            typeof req.body?.text === "string"
+                ? req.body.text.replace(/\u0000/g, "").trim()
+                : "";
 
         if (!messageId) {
             return res.status(400).json({
@@ -1015,9 +1081,16 @@ exports.editMessage = async (req, res, next) => {
             });
         }
 
-        if (!text || !text.trim()) {
+        if (!text) {
             return res.status(400).json({
                 message: "Message text is required"
+            });
+        }
+
+        if (text.length > MAX_MESSAGE_LENGTH) {
+            return res.status(400).json({
+                success: false,
+                message: `Messages must be ${MAX_MESSAGE_LENGTH} characters or fewer`
             });
         }
 
@@ -1063,7 +1136,7 @@ exports.editMessage = async (req, res, next) => {
             });
         }
 
-        message.text = text.trim();
+        message.text = text;
         message.isEdited = true;
 
         await message.save();
@@ -1097,16 +1170,38 @@ exports.editMessage = async (req, res, next) => {
 
 exports.forwardMessage = async (req, res) => {
     try {
-        const { messageId, chatIds } = req.body;
+        const { messageId: rawMessageId, chatIds } = req.body;
+        const messageId = String(rawMessageId || "");
         const userId = req.user._id;
 
-        if (!messageId || !Array.isArray(chatIds) || chatIds.length === 0) {
+        if (
+            !isObjectId(messageId) ||
+            !Array.isArray(chatIds) ||
+            chatIds.length === 0
+        ) {
             return res.status(400).json({
+                success: false,
                 message: "Message ID and destination chats are required"
             });
         }
 
-        const uniqueChatIds = [...new Set(chatIds.map(String))];
+        if (chatIds.length > MAX_FORWARD_TARGETS) {
+            return res.status(400).json({
+                success: false,
+                message: `You can forward to at most ${MAX_FORWARD_TARGETS} chats at once`
+            });
+        }
+
+        const uniqueChatIds = [
+            ...new Set(chatIds.map(String)),
+        ].filter((chatId) => isObjectId(chatId));
+
+        if (uniqueChatIds.length === 0) {
+            return res.status(400).json({
+                success: false,
+                message: "Choose at least one valid destination chat"
+            });
+        }
 
         const originalMessage = await Message.findOne({
             _id: messageId,
@@ -1149,6 +1244,20 @@ exports.forwardMessage = async (req, res) => {
             if (!isParticipant) {
                 return res.status(403).json({
                     message: "You are not a participant in a destination chat"
+                });
+            }
+
+            if (
+                destinationChat.isGroup &&
+                destinationChat.groupPermissions?.sendMessages === "admins" &&
+                !(destinationChat.groupAdmins || []).some(
+                    (adminId) =>
+                        adminId.toString() === userId.toString()
+                )
+            ) {
+                return res.status(403).json({
+                    message:
+                        "Only admins can send messages in that group"
                 });
             }
 

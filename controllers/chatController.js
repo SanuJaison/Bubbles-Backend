@@ -8,6 +8,13 @@ const {
     PARTICIPANT_FIELDS,
     createSystemMessage
 } = require("../utils/messageHelpers");
+const { isObjectId } = require("../middleware/securityMiddleware");
+const {
+    stripControlChars,
+    isValidHttpUrl,
+} = require("../utils/validation");
+
+const MAX_GROUP_MEMBERS = 250;
 
 const isAdmin = (chat, userId) =>
     (chat.groupAdmins || []).some(
@@ -77,15 +84,16 @@ const populateChat = (chatId) =>
 
 exports.createOrGetChat = async (req, res, next) => {
     try {
-        const { userId } = req.body;
+        const userId = String(req.body?.userId || "");
 
-        if (!userId) {
+        if (!isObjectId(userId)) {
             return res.status(400).json({
-                message: "User ID is required"
+                success: false,
+                message: "A valid user is required"
             });
         }
 
-        if (req.user._id.toString() === userId.toString()) {
+        if (req.user._id.toString() === userId) {
             return res.status(400).json({
                 message: "You cannot create a chat with yourself"
             });
@@ -287,17 +295,30 @@ exports.deleteChat = async (req, res, next) => {
 
 exports.createGroup = async (req, res, next) => {
     try {
-        const name = (req.body.name || "").trim();
+        const name = stripControlChars(req.body?.name);
+        const description =
+            typeof req.body?.description === "string"
+                ? stripControlChars(req.body.description)
+                : "";
 
         if (!name) {
             return res.status(400).json({
+                success: false,
                 message: "Group name is required"
             });
         }
 
-        if (name.length > 60) {
+        if (name.length > 80) {
             return res.status(400).json({
+                success: false,
                 message: "Group name is too long"
+            });
+        }
+
+        if (description.length > 500) {
+            return res.status(400).json({
+                success: false,
+                message: "Group description is too long"
             });
         }
 
@@ -308,10 +329,18 @@ exports.createGroup = async (req, res, next) => {
                 ).filter(
                     (participantId) =>
                         participantId &&
+                        isObjectId(participantId) &&
                         participantId !== req.user._id.toString()
                 )
             )
         ];
+
+        if (requestedIds.length > MAX_GROUP_MEMBERS - 1) {
+            return res.status(400).json({
+                success: false,
+                message: `A group can have at most ${MAX_GROUP_MEMBERS} members`
+            });
+        }
 
         const users = requestedIds.length
             ? await User.find({ _id: { $in: requestedIds } }).select("_id")
@@ -319,15 +348,27 @@ exports.createGroup = async (req, res, next) => {
 
         const memberIds = users.map((user) => user._id.toString());
 
+        const avatarValue =
+            typeof req.body?.avatar === "string"
+                ? req.body.avatar.trim()
+                : "";
+
+        if (avatarValue && !isValidHttpUrl(avatarValue)) {
+            return res.status(400).json({
+                success: false,
+                message: "Group photo must be a valid image URL"
+            });
+        }
+
         const avatar = req.file
             ? await uploadGroupAvatar(req.file)
-            : (req.body.avatar || "").trim();
+            : avatarValue;
 
         const chat = await Chat.create({
             participants: [req.user._id, ...memberIds],
             isGroup: true,
             groupName: name,
-            groupDescription: (req.body.description || "").trim(),
+            groupDescription: description,
             groupAvatar: avatar,
             groupAdmins: [req.user._id],
             groupCreatedBy: req.user._id
@@ -417,11 +458,19 @@ exports.updateGroup = async (req, res, next) => {
         const changes = [];
 
         if (typeof req.body.name === "string") {
-            const nextName = req.body.name.trim();
+            const nextName = stripControlChars(req.body.name);
 
             if (!nextName) {
                 return res.status(400).json({
+                    success: false,
                     message: "Group name is required"
+                });
+            }
+
+            if (nextName.length > 80) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Group name is too long"
                 });
             }
 
@@ -432,14 +481,32 @@ exports.updateGroup = async (req, res, next) => {
         }
 
         if (typeof req.body.description === "string") {
-            chat.groupDescription = req.body.description.trim();
+            const nextDescription = stripControlChars(req.body.description);
+
+            if (nextDescription.length > 500) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Group description is too long"
+                });
+            }
+
+            chat.groupDescription = nextDescription;
         }
 
         if (req.file) {
             chat.groupAvatar = await uploadGroupAvatar(req.file);
             changes.push("changed the group photo");
         } else if (typeof req.body.avatar === "string" && req.body.avatar) {
-            chat.groupAvatar = req.body.avatar.trim();
+            const nextAvatar = req.body.avatar.trim();
+
+            if (!isValidHttpUrl(nextAvatar)) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Group photo must be a valid image URL"
+                });
+            }
+
+            chat.groupAvatar = nextAvatar;
         }
 
         await chat.save();
@@ -501,7 +568,7 @@ exports.addGroupMembers = async (req, res, next) => {
 
         const requestedIds = parseParticipantIds(
             req.body.participantIds || req.body.members
-        ).filter(Boolean);
+        ).filter((participantId) => isObjectId(participantId));
 
         const existingIds = chat.participants.map((participantId) =>
             participantId.toString()
@@ -518,7 +585,15 @@ exports.addGroupMembers = async (req, res, next) => {
 
         if (newIds.length === 0) {
             return res.status(400).json({
+                success: false,
                 message: "No new members to add"
+            });
+        }
+
+        if (existingIds.length + newIds.length > MAX_GROUP_MEMBERS) {
+            return res.status(400).json({
+                success: false,
+                message: `A group can have at most ${MAX_GROUP_MEMBERS} members`
             });
         }
 
@@ -980,11 +1055,23 @@ exports.reportChat = async (req, res, next) => {
             });
         }
 
-        const { reason, details } = req.body;
+        const reason = stripControlChars(req.body?.reason);
+        const details =
+            typeof req.body?.details === "string"
+                ? stripControlChars(req.body.details)
+                : "";
 
-        if (!reason || !reason.trim()) {
+        if (!reason) {
             return res.status(400).json({
+                success: false,
                 message: "A reason is required"
+            });
+        }
+
+        if (reason.length > 80 || details.length > 1000) {
+            return res.status(400).json({
+                success: false,
+                message: "That report is too long"
             });
         }
 
@@ -992,13 +1079,16 @@ exports.reportChat = async (req, res, next) => {
             reporter: req.user._id,
             reportedUser: chat.groupCreatedBy || null,
             chat: chat._id,
-            reason: reason.trim(),
-            details: (details || "").trim()
+            reason,
+            details
         });
 
         return res.status(201).json({
             message: "Report submitted",
-            report
+            report: {
+                id: report._id,
+                status: report.status
+            }
         });
 
     } catch (error) {

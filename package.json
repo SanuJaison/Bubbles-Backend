@@ -15,12 +15,20 @@
     "cloudinary": "^2.11.0",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
-    "express": "^5.2.1",
+    "express": "^5.3.0",
+    "express-rate-limit": "^8.7.1",
+    "google-auth-library": "^11.3.1",
+    "helmet": "^8.3.0",
     "jsonwebtoken": "^9.0.3",
     "mammoth": "^1.13.0",
-    "mongoose": "^9.9.3",
-    "multer": "^2.2.0",
+    "mongoose": "^9.11.3",
+    "multer": "^2.4.0",
+    "nodemailer": "^10.2.0",
     "pdf-parse": "^2.4.5",
     "socket.io": "^4.8.3"
+  },
+  "overrides": {
+    "argparse": "^3.0.3",
+    "sprintf-js": "^1.1.3"
   }
 }
