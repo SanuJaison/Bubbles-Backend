@@ -1,5 +1,59 @@
 const mongoose = require("mongoose");
 
+// One row per browser/device a person has signed in from. The admin area uses
+// this to show what people are actually using Bubbles on. It is capped in
+// `recordUserDevice` so a long-lived account cannot grow this list forever.
+const deviceSchema = new mongoose.Schema(
+  {
+    deviceId: {
+      type: String,
+      default: "",
+      maxlength: 80,
+    },
+
+    type: {
+      type: String,
+      enum: ["desktop", "mobile", "tablet", "unknown"],
+      default: "unknown",
+    },
+
+    os: {
+      type: String,
+      default: "",
+      maxlength: 60,
+    },
+
+    browser: {
+      type: String,
+      default: "",
+      maxlength: 60,
+    },
+
+    userAgent: {
+      type: String,
+      default: "",
+      maxlength: 500,
+    },
+
+    ip: {
+      type: String,
+      default: "",
+      maxlength: 64,
+    },
+
+    firstSeenAt: {
+      type: Date,
+      default: Date.now,
+    },
+
+    lastActiveAt: {
+      type: Date,
+      default: Date.now,
+    },
+  },
+  { _id: false }
+);
+
 const userSchema = new mongoose.Schema(
   {
     name: {
@@ -131,6 +185,13 @@ const userSchema = new mongoose.Schema(
       default: null,
     },
 
+    // Recorded at sign-in and when the app opens. Older accounts simply have
+    // an empty list until their next visit.
+    devices: {
+      type: [deviceSchema],
+      default: [],
+    },
+
     profilePhotoVisibility: {
       type: String,
       enum: ["everyone", "contacts", "nobody"],
@@ -222,6 +283,9 @@ const userSchema = new mongoose.Schema(
     timestamps: true,
   }
 );
+
+userSchema.index({ "devices.type": 1 });
+userSchema.index({ "devices.lastActiveAt": -1 });
 
 const User = mongoose.model("User", userSchema);
 

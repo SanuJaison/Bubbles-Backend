@@ -4,6 +4,7 @@ const {
     loginUser,
     googleAuth,
     getUserProfile,
+    recordDevice,
     editUserProfile,
     updateChatWallpaper,
     changePassword,
@@ -52,6 +53,8 @@ userRoutes.post("/verify-email", verifyLimiter, verifyEmail);
 userRoutes.post("/resend-verification", emailLimiter, resendVerification);
 
 userRoutes.get("/profile", authMiddleware, getUserProfile);
+
+userRoutes.post("/device", authMiddleware, recordDevice);
 
 userRoutes.patch(
     "/username",

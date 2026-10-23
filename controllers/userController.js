@@ -26,6 +26,10 @@ const {
     getPasswordProblem,
     isValidHttpUrl,
 } = require("../utils/validation");
+const {
+    getRequestDeviceDetails,
+    recordUserDevice,
+} = require("../utils/deviceInfo");
 
 const PASSWORD_COST = 12;
 // Comparing against a real hash when the account does not exist keeps the
@@ -86,6 +90,16 @@ const buildPublicUser = (user) => ({
     blockedUsers: user.blockedUsers || [],
     needsUsername: Boolean(user.needsUsername),
 });
+
+// Device tracking is useful for the admin area, but it must never make a
+// successful sign-in fail. The user is already authenticated at this point.
+const rememberDevice = async (user, req) => {
+    try {
+        await recordUserDevice(user, getRequestDeviceDetails(req));
+    } catch (error) {
+        console.error("Could not record user device:", error.message);
+    }
+};
 
 const getClientOrigin = () => {
     const configured =
@@ -272,6 +286,8 @@ exports.registerUser = async (req, res, next) => {
             });
         }
 
+        await rememberDevice(newUser, req);
+
         res.status(201).json({
             message:
                 "Account created. Check your email to verify it before signing in.",
@@ -362,6 +378,8 @@ exports.loginUser = async (req, res, next) => {
             user.password = await bcrypt.hash(password, PASSWORD_COST);
             await user.save();
         }
+
+        await rememberDevice(user, req);
 
         const token = signAuthToken(user._id, user.tokenVersion);
 
@@ -499,6 +517,8 @@ exports.googleAuth = async (req, res, next) => {
             });
         }
 
+        await rememberDevice(user, req);
+
         const token = signAuthToken(user._id, user.tokenVersion);
 
         return res.status(200).json({
@@ -531,6 +551,19 @@ exports.getUserProfile = async (req, res, next) => {
         next(error);
     }
 }
+
+exports.recordDevice = async (req, res, next) => {
+    try {
+        await recordUserDevice(req.user, getRequestDeviceDetails(req));
+
+        res.status(200).json({
+            success: true,
+            message: "Device updated",
+        });
+    } catch (error) {
+        next(error);
+    }
+};
 
 exports.editUserProfile = async (req, res, next) => {
     try {

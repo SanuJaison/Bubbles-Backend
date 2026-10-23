@@ -1751,5 +1751,9 @@ const socketHandler = (io) => {
     });
 };
 
+// The admin dashboard shows who is actually connected, including people who
+// have hidden their presence from other users. This is an internal view only.
+socketHandler.getConnectedUserIds = () => Array.from(onlineUsers.keys());
+
 module.exports = socketHandler;
 module.exports.getUserRoom = getUserRoom;
