@@ -96,6 +96,15 @@ const uploadLimiter = rateLimit({
     ),
 });
 
+const feedbackLimiter = rateLimit({
+    ...common,
+    windowMs: 60 * 60 * 1000,
+    limit: 10,
+    handler: jsonLimitHandler(
+        "Too many feedback messages were sent from this connection. Please try again later."
+    ),
+});
+
 module.exports = {
     apiLimiter,
     authLimiter,
@@ -106,4 +115,5 @@ module.exports = {
     verifyLimiter,
     messageLimiter,
     uploadLimiter,
+    feedbackLimiter,
 };

@@ -23,6 +23,7 @@ const userRoutes = require("./routes/userRoutes");
 const chatRoutes = require("./routes/chatRoutes");
 const messageRoutes = require("./routes/messageRoutes");
 const aiRoutes = require("./routes/aiRoutes");
+const feedbackRoutes = require("./routes/feedbackRoutes");
 const errorMiddleware = require("./middleware/errorMiddleware");
 const { apiLimiter } = require("./middleware/rateLimiters");
 const {
@@ -85,6 +86,7 @@ bubblesServer.use("/api/users", userRoutes);
 bubblesServer.use("/api/chats", chatRoutes);
 bubblesServer.use("/api/messages", messageRoutes);
 bubblesServer.use("/api/ai", aiRoutes);
+bubblesServer.use("/api/feedback", feedbackRoutes);
 
 bubblesServer.get("/", (req, res) => {
     res.status(200).json({

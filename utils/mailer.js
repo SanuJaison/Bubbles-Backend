@@ -308,8 +308,138 @@ const sendPasswordResetEmail = async ({ to, name, resetUrl }) => {
     });
 };
 
+const FEEDBACK_CATEGORY_LABELS = {
+    suggestion: "Suggestion",
+    bug: "Bug report",
+    feature: "Feature idea",
+    other: "Something else",
+};
+
+const FEEDBACK_SOURCE_LABELS = {
+    web: "Web",
+    android: "Android",
+    windows: "Windows",
+};
+
+const buildFeedbackNotificationEmail = ({
+    name,
+    email,
+    category,
+    message,
+    page,
+    source,
+    createdAt,
+}) => {
+    const categoryLabel = FEEDBACK_CATEGORY_LABELS[category] || "Feedback";
+    const sourceLabel = FEEDBACK_SOURCE_LABELS[source] || "Web";
+    const safeName = escapeHtml(name || "Anonymous");
+    const safeEmail = escapeHtml(email || "Not provided");
+    const safeMessage = escapeHtml(message);
+    const safePage = escapeHtml(page || "Not provided");
+    const received = createdAt
+        ? new Date(createdAt).toISOString()
+        : new Date().toISOString();
+
+    const text = [
+        "New Bubbles feedback",
+        "",
+        `Category: ${categoryLabel}`,
+        `From: ${name || "Anonymous"}${email ? ` <${email}>` : ""}`,
+        `Page: ${page || "Not provided"}`,
+        `Source: ${sourceLabel}`,
+        `Received: ${received}`,
+        "",
+        "Message:",
+        message,
+        "",
+        email
+            ? "Reply directly to this email to follow up with the sender."
+            : "The sender did not leave an email address.",
+        "",
+        "— Bubbles",
+    ].join("\n");
+
+    const html = `<!doctype html>
+<html>
+  <body style="margin:0;padding:0;background:#f6f1ff;font-family:Arial,Helvetica,sans-serif;color:#2b2440;">
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f6f1ff;padding:32px 12px;">
+      <tr>
+        <td align="center">
+          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:560px;background:#ffffff;border-radius:24px;overflow:hidden;box-shadow:0 12px 40px -16px rgba(109,74,224,0.35);">
+            <tr>
+              <td style="height:8px;background:#6d4ae0;background-image:linear-gradient(90deg,#6d4ae0,#a855f7,#e8659b,#f5917a);"></td>
+            </tr>
+            <tr>
+              <td style="padding:32px 32px 8px;">
+                <div style="font-size:24px;font-weight:800;letter-spacing:-0.5px;color:#6d4ae0;">Bubbles</div>
+                <div style="font-size:13px;color:#7c7895;margin-top:4px;">New feedback from the website</div>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:16px 32px 8px;">
+                <h1 style="margin:0 0 18px;font-size:22px;line-height:1.3;color:#2b2440;">${escapeHtml(categoryLabel)}</h1>
+                <p style="margin:0 0 8px;font-size:14px;line-height:1.6;color:#4a4560;"><strong style="color:#2b2440;">From:</strong> ${safeName}${email ? ` &lt;${safeEmail}&gt;` : ""}</p>
+                <p style="margin:0 0 8px;font-size:14px;line-height:1.6;color:#4a4560;"><strong style="color:#2b2440;">Page:</strong> ${safePage}</p>
+                <p style="margin:0 0 8px;font-size:14px;line-height:1.6;color:#4a4560;"><strong style="color:#2b2440;">Source:</strong> ${escapeHtml(sourceLabel)}</p>
+                <p style="margin:0 0 18px;font-size:14px;line-height:1.6;color:#4a4560;"><strong style="color:#2b2440;">Received:</strong> ${escapeHtml(received)}</p>
+                <div style="border:1px solid #ece2ff;border-radius:16px;background:#faf7ff;padding:16px 18px;font-size:15px;line-height:1.7;color:#2b2440;white-space:pre-wrap;">${safeMessage}</div>
+                <p style="margin:18px 0 24px;font-size:13px;line-height:1.6;color:#7c7895;">
+                  ${
+                      email
+                          ? "Reply directly to this email to follow up with the sender."
+                          : "The sender did not leave an email address."
+                  }
+                </p>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:16px 32px 28px;border-top:1px solid #ece2ff;">
+                <p style="margin:0;font-size:12px;line-height:1.6;color:#9a95ad;">
+                  Sent from the Bubbles feedback form.
+                </p>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>`;
+
+    return {
+        subject: `New Bubbles feedback: ${categoryLabel}`,
+        text,
+        html,
+    };
+};
+
+const sendFeedbackNotificationEmail = async (feedback) => {
+    const transport = getTransport();
+    const to = (
+        process.env.FEEDBACK_EMAIL ||
+        process.env.SMTP_USER ||
+        ""
+    ).trim();
+
+    if (!transport || !to) {
+        return { sent: false };
+    }
+
+    const { subject, text, html } = buildFeedbackNotificationEmail(feedback);
+
+    return transport.sendMail({
+        from: getMailConfig().from,
+        to,
+        replyTo: feedback.email || undefined,
+        subject,
+        text,
+        html,
+    });
+};
+
 module.exports = {
     isEmailConfigured,
     sendEmailVerificationEmail,
     sendPasswordResetEmail,
+    sendFeedbackNotificationEmail,
 };
