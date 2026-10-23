@@ -427,9 +427,13 @@ exports.getUser = async (req, res, next) => {
         const [chats, groups, messages, calls, feedback] = await Promise.all([
             Chat.countDocuments({ participants: user._id }),
             Chat.countDocuments({ participants: user._id, isGroup: true }),
-            Message.countDocuments({ sender: user._id }),
             Message.countDocuments({
                 sender: user._id,
+                isDeleted: { $ne: true },
+            }),
+            Message.countDocuments({
+                sender: user._id,
+                isDeleted: { $ne: true },
                 messageType: "call",
             }),
             user.email
