@@ -39,14 +39,25 @@ const defaultOrigins = [
     "http://127.0.0.1:5173",
 ];
 
-const allowedOrigins = (
-    process.env.CLIENT_URLS ||
-    process.env.CLIENT_URL ||
-    defaultOrigins.join(",")
-)
-    .split(",")
-    .map((origin) => origin.trim().replace(/\/+$/, ""))
-    .filter(Boolean);
+// Tauri serves the bundled desktop frontend from these origins. They must stay
+// allowed even when CLIENT_URL(S) points at the hosted web app.
+const desktopOrigins = [
+    "http://tauri.localhost",
+    "https://tauri.localhost",
+    "tauri://localhost",
+];
+
+const allowedOrigins = [
+    ...(
+        process.env.CLIENT_URLS ||
+        process.env.CLIENT_URL ||
+        defaultOrigins.join(",")
+    )
+        .split(",")
+        .map((origin) => origin.trim().replace(/\/+$/, ""))
+        .filter(Boolean),
+    ...desktopOrigins,
+];
 
 const isAllowedOrigin = (origin) => {
     if (!origin) {
