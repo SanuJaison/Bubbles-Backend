@@ -26,7 +26,7 @@ The app includes light, dark, and system themes, chat wallpapers, and message st
 Voice and video calls work in the web app and the Windows desktop app. Calls are not available in the Android app yet.
 Bubbles AI is the built-in assistant. It can help write messages, plan group chats, explain Bubbles features, brainstorm, read attachments, and search the web. AI conversations are stored on the device.
 Bubbles has a public feedback page. There is no claim of end-to-end encryption; privacy details are in the Privacy Policy.
-The web app is at https://bubbles-zeta-nine.vercel.app. The Windows installer is available from https://github.com/SanuJaison/Bubbles/releases/latest. The feedback page is at https://bubbles-zeta-nine.vercel.app/feedback.
+The web app is at https://bubbles-zeta-nine.vercel.app. The download section at https://bubbles-zeta-nine.vercel.app/#download has the Windows installer. The feedback page is at https://bubbles-zeta-nine.vercel.app/feedback.
 When the user asks about Bubbles, answer only from these facts. Do not mention other chat apps, app stores, or features Bubbles does not have. If the user asks you to compare Bubbles with another app, answer only with Bubbles facts and do not describe the other app. If something is not covered here, say you are not sure instead of inventing it.`;
 
 const SOURCE_PROMPT = `Source rules:
