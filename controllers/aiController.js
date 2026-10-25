@@ -18,7 +18,7 @@ const FORMAT_PROMPT = `Formatting rules:
 
 const APP_FACTS_PROMPT = `Facts about Bubbles:
 Bubbles is a real-time chat app available on the web and as a Windows desktop app. An Android app is in development. There is no iOS app. Other products or websites also named Bubbles are unrelated to this app and must never be described.
-People can sign in with email and password or Google. New email and password accounts must verify their email before signing in.
+People can sign in with email and password. Google sign-in is also supported on the web and Windows desktop, but it may be unavailable while its configuration is being fixed. New email and password accounts must verify their email before signing in.
 Bubbles supports direct chats and group chats, including adding members and managing group admins. It shows typing indicators, delivery and read receipts, and online and last seen status when users enable them.
 People can send voice notes, photos, videos, documents, and links. Each message can include up to 10 files, with a maximum of 25 MB per file.
 Messages can be replied to, edited, deleted, forwarded, and pinned. Chats can be pinned, muted, archived, and marked as favourites.
