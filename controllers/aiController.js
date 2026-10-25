@@ -17,7 +17,7 @@ const FORMAT_PROMPT = `Formatting rules:
 - Keep answers easy to read on a phone.`;
 
 const APP_FACTS_PROMPT = `Facts about Bubbles:
-Bubbles is a real-time chat app available on the web and as a Windows desktop app. An Android app is in development. There is no iOS app.
+Bubbles is a real-time chat app available on the web and as a Windows desktop app. An Android app is in development. There is no iOS app. Other products or websites also named Bubbles are unrelated to this app and must never be described.
 People can sign in with email and password or Google. New email and password accounts must verify their email before signing in.
 Bubbles supports direct chats and group chats, including adding members and managing group admins. It shows typing indicators, delivery and read receipts, and online and last seen status when users enable them.
 People can send voice notes, photos, videos, documents, and links. Each message can include up to 10 files, with a maximum of 25 MB per file.
@@ -37,6 +37,26 @@ const SEARCH_PROMPT = `You can use live browser search.
 Use it whenever the answer depends on recent events, current prices, weather, sports, releases, or facts that may have changed.
 When you use browser search, base the answer only on the search results. If the results do not clearly contain the answer, say you could not verify it.
 Never invent dates, headlines, prices, scores, or other current facts.`;
+
+const BUBBLES_ONLY_PROMPT = `The user is asking about Bubbles, the app you are built into. Use only the facts above. Do not use web search. Do not mention or compare any other app, platform, app store, or unrelated product called Bubbles. If the facts do not cover the question, say you are not sure.`;
+
+const asksAboutBubbles = (value) => {
+    const text = String(value || "");
+
+    if (
+        /\b(soap|air|water|foam|gas|boiling|champagne|soda|sparkling)\b/i.test(
+            text
+        )
+    ) {
+        return false;
+    }
+
+    return (
+        /\bbubbles\b/i.test(text) ||
+        /\b(this|your|our)\s+(app|website|site)\b/i.test(text) ||
+        /\b(desktop|windows|android|web)\s+app\b/i.test(text)
+    );
+};
 
 // A light safety net so one client can't hammer the provider.
 const RATE_LIMIT = 20;
@@ -191,7 +211,9 @@ exports.chatWithAI = async (req, res, next) => {
             });
         }
 
-        const wantsSources = asksForLinks(messages[messages.length - 1].content);
+        const lastUserContent = messages[messages.length - 1].content;
+        const wantsSources = asksForLinks(lastUserContent);
+        const bubblesQuestion = asksAboutBubbles(lastUserContent);
 
         if (!provider.apiKey) {
             return res.status(503).json({
@@ -209,6 +231,10 @@ exports.chatWithAI = async (req, res, next) => {
 
         const files = Array.isArray(req.files) ? req.files : [];
         const attachmentContext = await buildAttachmentContext(files, provider);
+        const canUseBrowserSearch =
+            provider.supportsBrowserSearch &&
+            !attachmentContext.hasImages &&
+            !bubblesQuestion;
 
         const lastMessage = messages[messages.length - 1];
         const lastUserText = attachmentContext.textContext
@@ -255,9 +281,8 @@ exports.chatWithAI = async (req, res, next) => {
             FORMAT_PROMPT,
             APP_FACTS_PROMPT,
             SOURCE_PROMPT,
-            provider.supportsBrowserSearch && !attachmentContext.hasImages
-                ? SEARCH_PROMPT
-                : "",
+            bubblesQuestion ? BUBBLES_ONLY_PROMPT : "",
+            canUseBrowserSearch ? SEARCH_PROMPT : "",
             `The current date is ${currentDate}.`,
             `The user's display name is ${displayName}.`,
         ]
@@ -278,7 +303,7 @@ exports.chatWithAI = async (req, res, next) => {
             ...(provider.isGroqKey && model.includes("gpt-oss")
                 ? { reasoning_effort: "low" }
                 : {}),
-            ...(provider.supportsBrowserSearch && !attachmentContext.hasImages
+            ...(canUseBrowserSearch
                 ? {
                       tools: [{ type: "browser_search" }],
                       tool_choice: "auto",
