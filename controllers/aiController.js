@@ -16,6 +16,22 @@ const FORMAT_PROMPT = `Formatting rules:
 - Do not use bullet symbols or numbered list markers. If you need to list something, put each item in a short sentence on its own line without a leading dash, star, bullet, or number.
 - Keep answers easy to read on a phone.`;
 
+const APP_FACTS_PROMPT = `Facts about Bubbles:
+Bubbles is a real-time chat app available on the web and as a Windows desktop app. An Android app is in development. There is no iOS app.
+People can sign in with email and password or Google. New email and password accounts must verify their email before signing in.
+Bubbles supports direct chats and group chats, including adding members and managing group admins. It shows typing indicators, delivery and read receipts, and online and last seen status when users enable them.
+People can send voice notes, photos, videos, documents, and links. Each message can include up to 10 files, with a maximum of 25 MB per file.
+Messages can be replied to, edited, deleted, forwarded, and pinned. Chats can be pinned, muted, archived, and marked as favourites.
+The app includes light, dark, and system themes, chat wallpapers, and message styles.
+Voice and video calls work in the web app and the Windows desktop app. Calls are not available in the Android app yet.
+Bubbles AI is the built-in assistant. It can help write messages, plan group chats, explain Bubbles features, brainstorm, read attachments, and search the web. AI conversations are stored on the device.
+Bubbles has a public feedback page. There is no claim of end-to-end encryption; privacy details are in the Privacy Policy.
+When the user asks about Bubbles, answer only from these facts. Do not mention other chat apps, app stores, or features Bubbles does not have. If the user asks you to compare Bubbles with another app, answer only with Bubbles facts and do not describe the other app. If something is not covered here, say you are not sure instead of inventing it.`;
+
+const SOURCE_PROMPT = `Source rules:
+Do not show a sources list, citations, or reference links unless the user explicitly asks for links, sources, or references.
+When you share a link, write the full URL as plain text so the app can make it clickable. Do not use markdown link syntax.`;
+
 const SEARCH_PROMPT = `You can use live browser search.
 Use it whenever the answer depends on recent events, current prices, weather, sports, releases, or facts that may have changed.
 When you use browser search, base the answer only on the search results. If the results do not clearly contain the answer, say you could not verify it.
@@ -117,6 +133,11 @@ const cleanAIReply = (value) =>
         .replace(/\n{3,}/g, "\n\n")
         .trim();
 
+const asksForLinks = (value) =>
+    /\b(link|links|url|urls|source|sources|reference|references|website|websites)\b/i.test(
+        String(value || "")
+    );
+
 const collectSources = (message) => {
     const sources = [];
     const seen = new Set();
@@ -168,6 +189,8 @@ exports.chatWithAI = async (req, res, next) => {
                 message: "Send a message for Bubbles AI to reply to",
             });
         }
+
+        const wantsSources = asksForLinks(messages[messages.length - 1].content);
 
         if (!provider.apiKey) {
             return res.status(503).json({
@@ -229,6 +252,8 @@ exports.chatWithAI = async (req, res, next) => {
         const systemPrompt = [
             SYSTEM_PROMPT,
             FORMAT_PROMPT,
+            APP_FACTS_PROMPT,
+            SOURCE_PROMPT,
             provider.supportsBrowserSearch && !attachmentContext.hasImages
                 ? SEARCH_PROMPT
                 : "",
@@ -302,7 +327,8 @@ exports.chatWithAI = async (req, res, next) => {
             message: "Bubbles AI replied",
             reply,
             model: payload?.model || model,
-            sources,
+            sources: wantsSources ? sources : [],
+            showSources: wantsSources && sources.length > 0,
             usedWebSearch:
                 sources.length > 0 ||
                 (responseMessage?.executed_tools || []).some((tool) =>
