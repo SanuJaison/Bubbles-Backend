@@ -3,6 +3,46 @@ const nodemailer = require("nodemailer");
 let cachedTransport = null;
 let cachedConfigKey = "";
 
+const parseAddress = (value) => {
+    const text = String(value || "").trim();
+    const match = text.match(/<([^>]+)>/);
+
+    return match ? match[1].trim() : text;
+};
+
+const parseSenderName = (value) => {
+    const text = String(value || "").trim();
+    const match = text.match(/^(.*?)<[^>]+>$/);
+    const name = match ? match[1].trim().replace(/^"|"$/g, "") : "";
+
+    return name || "Bubbles";
+};
+
+// Brevo's HTTPS API is the production path: free Render web services block
+// outbound SMTP ports, but HTTPS keeps working. SMTP stays as a fallback so
+// local development and paid hosts behave exactly as before.
+const getBrevoConfig = () => {
+    const apiKey = (process.env.BREVO_API_KEY || "").trim();
+    const rawFrom = (
+        process.env.BREVO_SENDER_EMAIL ||
+        process.env.SMTP_FROM ||
+        process.env.SMTP_USER ||
+        ""
+    ).trim();
+    const fromEmail = parseAddress(rawFrom);
+    const fromName =
+        (process.env.BREVO_SENDER_NAME || "").trim() ||
+        parseSenderName(rawFrom);
+
+    return { apiKey, fromEmail, fromName };
+};
+
+const isBrevoConfigured = () => {
+    const config = getBrevoConfig();
+
+    return Boolean(config.apiKey && config.fromEmail);
+};
+
 const getMailConfig = () => {
     const service = (process.env.SMTP_SERVICE || "").trim();
     const host = (process.env.SMTP_HOST || "").trim();
@@ -20,6 +60,10 @@ const getMailConfig = () => {
 };
 
 const isEmailConfigured = () => {
+    if (isBrevoConfigured()) {
+        return true;
+    }
+
     const config = getMailConfig();
 
     if (!config.from) {
@@ -255,57 +299,92 @@ const buildEmailVerificationEmail = ({ name, verifyUrl, expiresMinutes }) => {
     };
 };
 
+const sendViaBrevo = async ({ to, subject, text, html, replyTo }) => {
+    const config = getBrevoConfig();
+
+    const response = await fetch("https://api.brevo.com/v3/smtp/email", {
+        method: "POST",
+        headers: {
+            "api-key": config.apiKey,
+            "content-type": "application/json",
+            accept: "application/json",
+        },
+        body: JSON.stringify({
+            sender: {
+                name: config.fromName,
+                email: config.fromEmail,
+            },
+            to: [{ email: to }],
+            subject,
+            htmlContent: html,
+            textContent: text,
+            ...(replyTo ? { replyTo: { email: replyTo } } : {}),
+        }),
+    });
+
+    if (!response.ok) {
+        let detail = "";
+
+        try {
+            detail = JSON.stringify(await response.json());
+        } catch (error) {
+            detail = "";
+        }
+
+        const sendError = new Error(
+            `Brevo rejected the email (${response.status}). ${detail}`.trim()
+        );
+        sendError.code = "EMAIL_SEND_FAILED";
+        throw sendError;
+    }
+
+    return { sent: true, provider: "brevo" };
+};
+
+const deliverEmail = async ({ to, subject, text, html, replyTo }) => {
+    if (isBrevoConfigured()) {
+        return sendViaBrevo({ to, subject, text, html, replyTo });
+    }
+
+    const transport = getTransport();
+
+    if (!transport) {
+        const error = new Error(
+            "Email is not configured. Add BREVO_API_KEY or the SMTP settings to the backend .env file."
+        );
+        error.code = "EMAIL_NOT_CONFIGURED";
+        throw error;
+    }
+
+    return transport.sendMail({
+        from: getMailConfig().from,
+        to,
+        subject,
+        text,
+        html,
+        replyTo: replyTo || undefined,
+    });
+};
+
 const sendEmailVerificationEmail = async ({
     to,
     name,
     verifyUrl,
     expiresMinutes,
 }) => {
-    const transport = getTransport();
-
-    if (!transport) {
-        const error = new Error(
-            "Email is not configured. Add the SMTP settings to the backend .env file."
-        );
-        error.code = "EMAIL_NOT_CONFIGURED";
-        throw error;
-    }
-
     const { subject, text, html } = buildEmailVerificationEmail({
         name,
         verifyUrl,
         expiresMinutes,
     });
 
-    return transport.sendMail({
-        from: getMailConfig().from,
-        to,
-        subject,
-        text,
-        html,
-    });
+    return deliverEmail({ to, subject, text, html });
 };
 
 const sendPasswordResetEmail = async ({ to, name, resetUrl }) => {
-    const transport = getTransport();
-
-    if (!transport) {
-        const error = new Error(
-            "Email is not configured. Add the SMTP settings to the backend .env file."
-        );
-        error.code = "EMAIL_NOT_CONFIGURED";
-        throw error;
-    }
-
     const { subject, text, html } = buildPasswordResetEmail({ name, resetUrl });
 
-    return transport.sendMail({
-        from: getMailConfig().from,
-        to,
-        subject,
-        text,
-        html,
-    });
+    return deliverEmail({ to, subject, text, html });
 };
 
 const FEEDBACK_CATEGORY_LABELS = {
@@ -414,26 +493,24 @@ const buildFeedbackNotificationEmail = ({
 };
 
 const sendFeedbackNotificationEmail = async (feedback) => {
-    const transport = getTransport();
     const to = (
         process.env.FEEDBACK_EMAIL ||
         process.env.SMTP_USER ||
         ""
     ).trim();
 
-    if (!transport || !to) {
+    if (!isEmailConfigured() || !to) {
         return { sent: false };
     }
 
     const { subject, text, html } = buildFeedbackNotificationEmail(feedback);
 
-    return transport.sendMail({
-        from: getMailConfig().from,
+    return deliverEmail({
         to,
-        replyTo: feedback.email || undefined,
         subject,
         text,
         html,
+        replyTo: feedback.email || undefined,
     });
 };
 

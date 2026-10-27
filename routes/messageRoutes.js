@@ -10,6 +10,7 @@ const {
     forwardMessage,
     clearChat,
     logCall,
+    toggleMessageReaction,
 } = require("../controllers/messageController");
 const authMiddleware = require("../middleware/authMiddleware");
 const { chatUpload } = require("../middleware/uploadMiddleware");
@@ -54,6 +55,12 @@ messageRoutes.patch(
 );
 
 messageRoutes.patch("/pin/:messageId", authMiddleware, togglePinMessage);
+
+messageRoutes.patch(
+    "/:messageId/reaction",
+    authMiddleware,
+    toggleMessageReaction
+);
 
 messageRoutes.delete("/chat/:chatId", authMiddleware, clearChat);
 

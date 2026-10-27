@@ -94,6 +94,28 @@ const messageSchema = new mongoose.Schema(
             }
         ],
 
+        // One entry per person who reacted. A person can only have one
+        // reaction on a message at a time; tapping a different emoji replaces
+        // their previous one.
+        reactions: [
+            {
+                user: {
+                    type: mongoose.Schema.Types.ObjectId,
+                    ref: "User",
+                    required: true
+                },
+                emoji: {
+                    type: String,
+                    required: true,
+                    maxlength: 16
+                },
+                createdAt: {
+                    type: Date,
+                    default: Date.now
+                }
+            }
+        ],
+
         isDelivered: {
             type: Boolean,
             default: false

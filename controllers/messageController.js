@@ -13,6 +13,33 @@ const { stripControlChars } = require("../utils/validation");
 const MAX_MESSAGE_LENGTH = 10000;
 const MAX_FORWARD_TARGETS = 20;
 
+// Reaction users are populated for the client, but only the public profile
+// fields belong in the response. Mongoose keeps `select: true` fields (like
+// tokenVersion) in projections, so strip them explicitly here.
+const serializeReactions = (reactions) =>
+    (Array.isArray(reactions) ? reactions : []).map((reaction) => {
+        const value =
+            typeof reaction.toObject === "function"
+                ? reaction.toObject()
+                : reaction;
+        const user = value.user;
+
+        return {
+            _id: value._id,
+            emoji: value.emoji,
+            createdAt: value.createdAt,
+            user:
+                user && typeof user === "object"
+                    ? {
+                          _id: user._id,
+                          name: user.name,
+                          username: user.username,
+                          profilePicture: user.profilePicture
+                      }
+                    : user
+        };
+    });
+
 // Who in this chat has the sender blocked? Those people must never see the
 // message, so it is stored with them in `blockedFor` and treated as unsent.
 const getBlockedByUserIds = async (chat, sender) => {
@@ -565,6 +592,10 @@ exports.getChatMessages = async (req, res, next) => {
                 "pinnedBy",
                 "name username blockedUsers blockedSnapshots"
             )
+            .populate(
+                "reactions.user",
+                "name username profilePicture blockedUsers blockedSnapshots"
+            )
             .sort({
                 createdAt: 1
             });
@@ -574,14 +605,20 @@ exports.getChatMessages = async (req, res, next) => {
         applyBlockSnapshots(
             [
                 ...messages.map((message) => message.sender),
-                ...messages.map((message) => message.pinnedBy)
+                ...messages.map((message) => message.pinnedBy),
+                ...messages.flatMap((message) =>
+                    (message.reactions || []).map((reaction) => reaction.user)
+                )
             ].filter(Boolean),
             req.user._id
         );
 
         return res.status(200).json({
             message: "Messages fetched successfully",
-            messages
+            messages: messages.map((message) => ({
+                ...message.toObject(),
+                reactions: serializeReactions(message.reactions)
+            }))
         });
 
     } catch (error) {
@@ -1397,6 +1434,124 @@ exports.clearChat = async (req, res, next) => {
 
         return res.status(200).json({
             message: "Chat cleared successfully"
+        });
+
+    } catch (error) {
+        next(error);
+    }
+};
+
+// A small, fixed set keeps reactions consistent between clients and stops a
+// message from being turned into an arbitrary block of text.
+const REACTION_EMOJIS = new Set([
+    "👍",
+    "❤️",
+    "😂",
+    "😮",
+    "😢",
+    "🙏",
+    "🔥",
+    "👏"
+]);
+
+const REACTION_USER_FIELDS = "name username profilePicture";
+
+exports.toggleMessageReaction = async (req, res, next) => {
+    try {
+        const { messageId } = req.params;
+        const emoji =
+            typeof req.body?.emoji === "string"
+                ? req.body.emoji.trim()
+                : "";
+
+        if (!messageId) {
+            return res.status(400).json({
+                message: "Message ID is required"
+            });
+        }
+
+        if (!REACTION_EMOJIS.has(emoji)) {
+            return res.status(400).json({
+                message: "That reaction is not available"
+            });
+        }
+
+        const message = await Message.findById(messageId);
+
+        if (!message) {
+            return res.status(404).json({
+                message: "Message not found"
+            });
+        }
+
+        if (message.isDeleted) {
+            return res.status(400).json({
+                message: "You cannot react to a deleted message"
+            });
+        }
+
+        const chat = await Chat.findById(message.chat);
+
+        if (!chat) {
+            return res.status(404).json({
+                message: "Chat not found"
+            });
+        }
+
+        const isParticipant = chat.participants.some(
+            (participant) =>
+                participant.toString() === req.user._id.toString()
+        );
+
+        if (!isParticipant) {
+            return res.status(403).json({
+                message: "You are not a participant in this chat"
+            });
+        }
+
+        const userId = req.user._id.toString();
+        const existing = (message.reactions || []).find(
+            (reaction) => reaction.user.toString() === userId
+        );
+
+        // Tapping the same emoji again removes the reaction; tapping a
+        // different one replaces it.
+        message.reactions = (message.reactions || []).filter(
+            (reaction) => reaction.user.toString() !== userId
+        );
+
+        if (!existing || existing.emoji !== emoji) {
+            message.reactions.push({
+                user: req.user._id,
+                emoji,
+                createdAt: new Date()
+            });
+        }
+
+        await message.save();
+        await message.populate("reactions.user", REACTION_USER_FIELDS);
+
+        const payload = {
+            messageId: message._id.toString(),
+            chatId: message.chat.toString(),
+            reactions: serializeReactions(message.reactions)
+        };
+
+        const io = req.app.get("io");
+
+        if (io) {
+            chat.participants.forEach((participant) => {
+                io.to(`user:${participant.toString()}`).emit(
+                    "messageReaction",
+                    payload
+                );
+            });
+        }
+
+        return res.status(200).json({
+            success: true,
+            message: "Reaction updated",
+            reactions: serializeReactions(message.reactions)
         });
 
     } catch (error) {
