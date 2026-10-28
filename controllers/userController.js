@@ -902,7 +902,7 @@ exports.forgotPassword = async (req, res, next) => {
             return res.status(503).json({
                 success: false,
                 message:
-                    "Password reset emails are not configured yet. Add the SMTP settings to the server .env file.",
+                    "Password reset emails are not configured yet. Add the email relay settings to the server environment.",
             });
         }
 
@@ -1104,7 +1104,7 @@ exports.resendVerification = async (req, res, next) => {
             return res.status(503).json({
                 success: false,
                 message:
-                    "Verification emails are not configured yet. Add the SMTP settings to the server .env file.",
+                    "Verification emails are not configured yet. Add the email relay settings to the server environment.",
             });
         }
 
