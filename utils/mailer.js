@@ -18,9 +18,30 @@ const parseSenderName = (value) => {
     return name || "Bubbles";
 };
 
-// Brevo's HTTPS API is the production path: free Render web services block
-// outbound SMTP ports, but HTTPS keeps working. SMTP stays as a fallback so
-// local development and paid hosts behave exactly as before.
+// Google Apps Script relay: a tiny web app deployed from a Gmail account can
+// send mail with MailApp over HTTPS. Render blocks SMTP ports, but this keeps
+// working on the free plan and needs no domain or paid provider.
+const getGasConfig = () => {
+    const url = (process.env.GAS_MAIL_URL || "").trim();
+    const secret = (process.env.GAS_MAIL_SECRET || "").trim();
+    const rawFrom = (
+        process.env.GAS_SENDER_EMAIL ||
+        process.env.SMTP_FROM ||
+        process.env.SMTP_USER ||
+        ""
+    ).trim();
+    const fromEmail = parseAddress(rawFrom);
+    const fromName =
+        (process.env.GAS_SENDER_NAME || "").trim() || parseSenderName(rawFrom);
+
+    return { url, secret, fromEmail, fromName };
+};
+
+const isGasConfigured = () => Boolean(getGasConfig().url);
+
+// Brevo's HTTPS API is an alternative HTTPS path: free Render web services
+// block outbound SMTP ports, but HTTPS keeps working. SMTP stays as a fallback
+// so local development and paid hosts behave exactly as before.
 const getBrevoConfig = () => {
     const apiKey = (process.env.BREVO_API_KEY || "").trim();
     const rawFrom = (
@@ -60,7 +81,7 @@ const getMailConfig = () => {
 };
 
 const isEmailConfigured = () => {
-    if (isBrevoConfigured()) {
+    if (isGasConfigured() || isBrevoConfigured()) {
         return true;
     }
 
@@ -299,6 +320,41 @@ const buildEmailVerificationEmail = ({ name, verifyUrl, expiresMinutes }) => {
     };
 };
 
+const sendViaGas = async ({ to, subject, text, html, replyTo }) => {
+    const config = getGasConfig();
+
+    const response = await fetch(config.url, {
+        method: "POST",
+        headers: {
+            "content-type": "application/json",
+            accept: "application/json",
+        },
+        body: JSON.stringify({
+            secret: config.secret,
+            to,
+            subject,
+            text,
+            html,
+            fromEmail: config.fromEmail,
+            fromName: config.fromName,
+            replyTo: replyTo || "",
+        }),
+        redirect: "follow",
+    });
+
+    const raw = await response.text();
+
+    if (!response.ok || !/"ok"\s*:\s*true/.test(raw)) {
+        const sendError = new Error(
+            `The Gmail relay rejected the email (${response.status}). ${raw.slice(0, 300)}`.trim()
+        );
+        sendError.code = "EMAIL_SEND_FAILED";
+        throw sendError;
+    }
+
+    return { sent: true, provider: "gmail-apps-script" };
+};
+
 const sendViaBrevo = async ({ to, subject, text, html, replyTo }) => {
     const config = getBrevoConfig();
 
@@ -342,6 +398,10 @@ const sendViaBrevo = async ({ to, subject, text, html, replyTo }) => {
 };
 
 const deliverEmail = async ({ to, subject, text, html, replyTo }) => {
+    if (isGasConfigured()) {
+        return sendViaGas({ to, subject, text, html, replyTo });
+    }
+
     if (isBrevoConfigured()) {
         return sendViaBrevo({ to, subject, text, html, replyTo });
     }
@@ -350,7 +410,7 @@ const deliverEmail = async ({ to, subject, text, html, replyTo }) => {
 
     if (!transport) {
         const error = new Error(
-            "Email is not configured. Add BREVO_API_KEY or the SMTP settings to the backend .env file."
+            "Email is not configured. Add GAS_MAIL_URL (Gmail relay) or the SMTP settings to the backend .env file."
         );
         error.code = "EMAIL_NOT_CONFIGURED";
         throw error;
