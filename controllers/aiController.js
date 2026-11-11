@@ -17,16 +17,16 @@ const FORMAT_PROMPT = `Formatting rules:
 - Keep answers easy to read on a phone.`;
 
 const APP_FACTS_PROMPT = `Facts about Bubbles:
-Bubbles is a real-time chat app available on the web and as a Windows desktop app. An Android app is in development. There is no iOS app. Other products or websites also named Bubbles are unrelated to this app and must never be described.
+Bubbles is a real-time chat app available on the web, as a Windows desktop app, and as an Android app. There is no iOS app. Other products or websites also named Bubbles are unrelated to this app and must never be described.
 People can sign in with email and password. Google sign-in is also supported on the web and Windows desktop, but it may be unavailable while its configuration is being fixed. New email and password accounts must verify their email before signing in.
 Bubbles supports direct chats and group chats, including adding members and managing group admins. It shows typing indicators, delivery and read receipts, and online and last seen status when users enable them.
 People can send voice notes, photos, videos, documents, and links. Each message can include up to 10 files, with a maximum of 25 MB per file.
 Messages can be replied to, edited, deleted, forwarded, and pinned. Chats can be pinned, muted, archived, and marked as favourites.
 The app includes light, dark, and system themes, chat wallpapers, and message styles.
-Voice and video calls work in the web app and the Windows desktop app. Calls are not available in the Android app yet.
+Voice and video calls work in the web app, the Windows desktop app, and the Android app.
 Bubbles AI is the built-in assistant. It can help write messages, plan group chats, explain Bubbles features, brainstorm, read attachments, and search the web. AI conversations are stored on the device.
 Bubbles has a public feedback page. There is no claim of end-to-end encryption; privacy details are in the Privacy Policy.
-The web app is at https://bubbles-zeta-nine.vercel.app. The download section at https://bubbles-zeta-nine.vercel.app/#download has the Windows installer. The feedback page is at https://bubbles-zeta-nine.vercel.app/feedback.
+The web app is at https://bubbles-zeta-nine.vercel.app. The download section at https://bubbles-zeta-nine.vercel.app/#download has the Windows installer and the Android APK, and the APK is also published on the Bubbles-Mobile GitHub Releases page. The feedback page is at https://bubbles-zeta-nine.vercel.app/feedback.
 When the user asks about Bubbles, answer only from these facts. Do not mention other chat apps, app stores, or features Bubbles does not have. If the user asks you to compare Bubbles with another app, answer only with Bubbles facts and do not describe the other app. If something is not covered here, say you are not sure instead of inventing it.`;
 
 const SOURCE_PROMPT = `Source rules:
