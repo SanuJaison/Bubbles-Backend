@@ -239,7 +239,12 @@ exports.registerUser = async (req, res, next) => {
             });
         }
 
-        if (!isEmailConfigured()) {
+        // The Android app skips the email round-trip: accounts created there are
+        // verified immediately and signed in on the spot. The website keeps the
+        // full verification flow.
+        const isMobileClient = req.get("x-bubbles-client") === "mobile";
+
+        if (!isMobileClient && !isEmailConfigured()) {
             return res.status(503).json({
                 success: false,
                 message:
@@ -248,6 +253,25 @@ exports.registerUser = async (req, res, next) => {
         }
 
         const hashedPassword = await bcrypt.hash(password, PASSWORD_COST);
+
+        if (isMobileClient) {
+            const mobileUser = new User({
+                name,
+                username,
+                email,
+                password: hashedPassword,
+                emailVerified: true,
+            });
+
+            await mobileUser.save();
+            await rememberDevice(mobileUser, req);
+
+            return res.status(201).json({
+                message: "Account created",
+                token: signAuthToken(mobileUser._id, mobileUser.tokenVersion),
+                user: buildPublicUser(mobileUser),
+            });
+        }
 
         const newUser = new User({
             name,
@@ -364,13 +388,21 @@ exports.loginUser = async (req, res, next) => {
         }
 
         if (user.emailVerified === false) {
-            return res.status(403).json({
-                success: false,
-                code: "EMAIL_NOT_VERIFIED",
-                email: user.email,
-                message:
-                    "Verify your email before signing in. Check your inbox for the verification link.",
-            });
+            // Accounts created from the app never go through email
+            // verification, so an older unverified account is upgraded the
+            // first time its owner signs in from the app.
+            if (req.get("x-bubbles-client") === "mobile") {
+                user.emailVerified = true;
+                await user.save();
+            } else {
+                return res.status(403).json({
+                    success: false,
+                    code: "EMAIL_NOT_VERIFIED",
+                    email: user.email,
+                    message:
+                        "Verify your email before signing in. Check your inbox for the verification link.",
+                });
+            }
         }
 
         // Upgrade older hashes the next time the owner signs in.

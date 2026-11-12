@@ -164,6 +164,29 @@ const clearCall = (callId) => {
     return call;
 };
 
+// A call that never received a matching call:end (a dropped connection, a
+// crash, a failed peer connection) would otherwise leave both accounts marked
+// busy and every later call would be rejected with "busy".
+const MAX_CALL_AGE_MS = 2 * 60 * 60 * 1000;
+
+const pruneStaleCalls = () => {
+    const now = Date.now();
+
+    for (const [callId, call] of Array.from(activeCalls.entries())) {
+        const startedAt = Number(call.startedAt) || 0;
+
+        if (startedAt && now - startedAt > MAX_CALL_AGE_MS) {
+            clearCall(callId);
+        }
+    }
+
+    for (const [userId, callId] of Array.from(busyUsers.entries())) {
+        if (!activeCalls.has(callId) && !groupCalls.has(callId)) {
+            busyUsers.delete(userId);
+        }
+    }
+};
+
 // Used when a user disconnects or signs out mid-call: the other side is told
 // the call ended so their UI never hangs on a dead connection.
 const endCallForUser = (io, userId) => {
@@ -992,6 +1015,8 @@ const socketHandler = (io) => {
                 return;
             }
 
+            pruneStaleCalls();
+
             const chatAllowsCall = await Chat.exists({
                 _id: String(chatId),
                 participants: { $all: [userId, targetId] },
@@ -1070,6 +1095,7 @@ const socketHandler = (io) => {
                     calleeId: targetId,
                     chatId: chatId ? chatId.toString() : null,
                     callType: callType === "video" ? "video" : "audio",
+                    startedAt: Date.now(),
                 });
 
                 busyUsers.set(userId, callId);
