@@ -264,7 +264,7 @@ exports.registerUser = async (req, res, next) => {
             });
 
             await mobileUser.save();
-            await rememberDevice(mobileUser, req);
+            void rememberDevice(mobileUser, req);
 
             return res.status(201).json({
                 message: "Account created",
@@ -310,7 +310,7 @@ exports.registerUser = async (req, res, next) => {
             });
         }
 
-        await rememberDevice(newUser, req);
+        void rememberDevice(newUser, req);
 
         res.status(201).json({
             message:
@@ -411,7 +411,7 @@ exports.loginUser = async (req, res, next) => {
             await user.save();
         }
 
-        await rememberDevice(user, req);
+        void rememberDevice(user, req);
 
         const token = signAuthToken(user._id, user.tokenVersion);
 
@@ -549,7 +549,7 @@ exports.googleAuth = async (req, res, next) => {
             });
         }
 
-        await rememberDevice(user, req);
+        void rememberDevice(user, req);
 
         const token = signAuthToken(user._id, user.tokenVersion);
 

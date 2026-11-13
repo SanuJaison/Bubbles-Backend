@@ -573,8 +573,11 @@ const syncUndeliveredMessages = async (io, userId) => {
 const socketHandler = (io) => {
 
     const resetOnlineUsers = () => {
+        // Only users who were connected when the process died can have a stale
+        // online flag. Touching every user here used to stamp a fake "last
+        // seen" (the server boot time) onto accounts that had never signed in.
         User.updateMany(
-            {},
+            { isOnline: true },
             {
                 isOnline: false,
                 lastSeen: new Date(),
