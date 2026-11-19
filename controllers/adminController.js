@@ -522,11 +522,14 @@ exports.sendUserPasswordReset = async (req, res, next) => {
             );
 
             // The link is still valid, so hand it back rather than leaving the
-            // admin with nothing to give the user.
+            // admin with nothing to give the user. `reason` is the relay's own
+            // message (never a credential) so the cause is visible without
+            // digging through server logs.
             return res.status(502).json({
                 success: false,
                 message:
                     "The reset email could not be sent. Copy the link below and send it to the user yourself.",
+                reason: String(error.message || "").slice(0, 200),
                 resetUrl,
             });
         }
