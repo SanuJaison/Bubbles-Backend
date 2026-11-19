@@ -51,6 +51,13 @@ const EMAIL_VERIFICATION_MINUTES = Math.min(
     Math.max(15, Number(process.env.EMAIL_VERIFICATION_MINUTES) || 1440)
 );
 
+// Email confirmation is switched off for now, so a new account is usable the
+// moment it is created. Everything needed to bring the inbox round-trip back
+// is still here: set REQUIRE_EMAIL_VERIFICATION=true and the register, login
+// and resend routes behave exactly as they did before.
+const isEmailVerificationRequired = () =>
+    process.env.REQUIRE_EMAIL_VERIFICATION === "true";
+
 // Raw tokens are only ever sent by email. The database keeps a SHA-256
 // digest, so a database leak cannot be used to verify or reset accounts.
 const hashToken = (token) =>
@@ -240,11 +247,13 @@ exports.registerUser = async (req, res, next) => {
         }
 
         // The Android app skips the email round-trip: accounts created there are
-        // verified immediately and signed in on the spot. The website keeps the
-        // full verification flow.
+        // verified immediately and signed in on the spot. The website follows
+        // the same path while email confirmation is switched off.
         const isMobileClient = req.get("x-bubbles-client") === "mobile";
+        const verificationRequired =
+            isEmailVerificationRequired() && !isMobileClient;
 
-        if (!isMobileClient && !isEmailConfigured()) {
+        if (verificationRequired && !isEmailConfigured()) {
             return res.status(503).json({
                 success: false,
                 message:
@@ -254,8 +263,8 @@ exports.registerUser = async (req, res, next) => {
 
         const hashedPassword = await bcrypt.hash(password, PASSWORD_COST);
 
-        if (isMobileClient) {
-            const mobileUser = new User({
+        if (!verificationRequired) {
+            const newUser = new User({
                 name,
                 username,
                 email,
@@ -263,13 +272,13 @@ exports.registerUser = async (req, res, next) => {
                 emailVerified: true,
             });
 
-            await mobileUser.save();
-            void rememberDevice(mobileUser, req);
+            await newUser.save();
+            void rememberDevice(newUser, req);
 
             return res.status(201).json({
                 message: "Account created",
-                token: signAuthToken(mobileUser._id, mobileUser.tokenVersion),
-                user: buildPublicUser(mobileUser),
+                token: signAuthToken(newUser._id, newUser.tokenVersion),
+                user: buildPublicUser(newUser),
             });
         }
 
@@ -388,10 +397,14 @@ exports.loginUser = async (req, res, next) => {
         }
 
         if (user.emailVerified === false) {
-            // Accounts created from the app never go through email
-            // verification, so an older unverified account is upgraded the
-            // first time its owner signs in from the app.
-            if (req.get("x-bubbles-client") === "mobile") {
+            // While email confirmation is switched off — and for accounts
+            // created from the app, which never went through it — an
+            // unverified account is upgraded on its next sign-in instead of
+            // being turned away.
+            if (
+                !isEmailVerificationRequired() ||
+                req.get("x-bubbles-client") === "mobile"
+            ) {
                 user.emailVerified = true;
                 await user.save();
             } else {
