@@ -4,11 +4,13 @@ const {
     getOverview,
     getUsers,
     getUser,
+    sendUserPasswordReset,
     getFeedback,
     updateFeedbackStatus,
 } = require("../controllers/adminController");
 const authMiddleware = require("../middleware/authMiddleware");
 const { adminMiddleware } = require("../middleware/adminMiddleware");
+const { emailLimiter } = require("../middleware/rateLimiters");
 const { objectIdParam } = require("../middleware/securityMiddleware");
 
 const adminRoutes = express.Router();
@@ -25,6 +27,11 @@ adminRoutes.get("/me", getMe);
 adminRoutes.get("/overview", getOverview);
 adminRoutes.get("/users", getUsers);
 adminRoutes.get("/users/:userId", getUser);
+adminRoutes.post(
+    "/users/:userId/password-reset",
+    emailLimiter,
+    sendUserPasswordReset
+);
 adminRoutes.get("/feedback", getFeedback);
 adminRoutes.patch("/feedback/:feedbackId", updateFeedbackStatus);
 

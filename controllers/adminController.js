@@ -6,6 +6,14 @@ const {
     getConnectedUserIds,
 } = require("../sockets/socketHandler");
 const {
+    isEmailConfigured,
+    sendPasswordResetEmail,
+} = require("../utils/mailer");
+const {
+    createPasswordResetToken,
+    buildPasswordResetUrl,
+} = require("../utils/passwordReset");
+const {
     asTrimmedString,
     normalizeEmail,
     stripControlChars,
@@ -459,8 +467,80 @@ exports.getUser = async (req, res, next) => {
     }
 };
 
-exports.getFeedback = async (req, res, next) => {
+/**
+ * Sends a password-reset link to one user's inbox.
+ *
+ * The admin never sets or sees a password: the link expires in 30 minutes and
+ * the person chooses their own new password on the normal reset screen.
+ */
+exports.sendUserPasswordReset = async (req, res, next) => {
     try {
+        const user = await User.findById(req.params.userId).select(
+            "name email googleId"
+        );
+
+        if (!user) {
+            return res.status(404).json({
+                success: false,
+                message: "User not found",
+            });
+        }
+
+        const email = normalizeEmail(user.email);
+
+        if (!email) {
+            return res.status(400).json({
+                success: false,
+                message: "This account has no email address to send a link to.",
+            });
+        }
+
+        if (!isEmailConfigured()) {
+            return res.status(503).json({
+                success: false,
+                message:
+                    "Email is not configured on the server yet, so the reset link cannot be sent.",
+            });
+        }
+
+        const rawToken = createPasswordResetToken(user);
+
+        await user.save();
+
+        const resetUrl = buildPasswordResetUrl(rawToken);
+
+        try {
+            await sendPasswordResetEmail({
+                to: email,
+                name: user.name,
+                resetUrl,
+            });
+        } catch (error) {
+            console.error(
+                "Admin password reset email could not be sent:",
+                error.message
+            );
+
+            // The link is still valid, so hand it back rather than leaving the
+            // admin with nothing to give the user.
+            return res.status(502).json({
+                success: false,
+                message:
+                    "The reset email could not be sent. Copy the link below and send it to the user yourself.",
+                resetUrl,
+            });
+        }
+
+        res.status(200).json({
+            success: true,
+            message: `Password reset link sent to ${email}.`,
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
+exports.getFeedback = async (req, res, next) => {    try {
         const { page, limit, skip } = getPagination(req.query);
         const filter = {};
         const search = stripControlChars(req.query.search).slice(0, 80);

@@ -30,6 +30,13 @@ const {
     getRequestDeviceDetails,
     recordUserDevice,
 } = require("../utils/deviceInfo");
+const { getAdminEmails } = require("../middleware/adminMiddleware");
+const { getClientOrigin } = require("../utils/clientUrl");
+const {
+    hashToken,
+    createPasswordResetToken,
+    buildPasswordResetUrl,
+} = require("../utils/passwordReset");
 
 const PASSWORD_COST = 12;
 // Comparing against a real hash when the account does not exist keeps the
@@ -40,11 +47,6 @@ const DUMMY_PASSWORD_HASH = bcrypt.hashSync(
 );
 
 const googleClient = new OAuth2Client();
-
-const PASSWORD_RESET_MINUTES = Math.min(
-    120,
-    Math.max(5, Number(process.env.PASSWORD_RESET_MINUTES) || 30)
-);
 
 const EMAIL_VERIFICATION_MINUTES = Math.min(
     1440,
@@ -57,11 +59,6 @@ const EMAIL_VERIFICATION_MINUTES = Math.min(
 // and resend routes behave exactly as they did before.
 const isEmailVerificationRequired = () =>
     process.env.REQUIRE_EMAIL_VERIFICATION === "true";
-
-// Raw tokens are only ever sent by email. The database keeps a SHA-256
-// digest, so a database leak cannot be used to verify or reset accounts.
-const hashToken = (token) =>
-    crypto.createHash("sha256").update(token).digest("hex");
 
 const createEmailVerificationToken = (user) => {
     const rawToken = crypto.randomBytes(32).toString("hex");
@@ -105,24 +102,6 @@ const rememberDevice = async (user, req) => {
         await recordUserDevice(user, getRequestDeviceDetails(req));
     } catch (error) {
         console.error("Could not record user device:", error.message);
-    }
-};
-
-const getClientOrigin = () => {
-    const configured =
-        process.env.PASSWORD_RESET_URL ||
-        process.env.CLIENT_URLS ||
-        process.env.CLIENT_URL ||
-        "http://localhost:5173";
-    const firstOrigin = String(configured)
-        .split(",")[0]
-        .trim()
-        .replace(/\/+$/, "");
-
-    try {
-        return new URL(firstOrigin).origin;
-    } catch {
-        return "http://localhost:5173";
     }
 };
 
@@ -958,19 +937,14 @@ exports.forgotPassword = async (req, res, next) => {
         // Blocked domains should not receive reset links. The response stays
         // generic so this cannot be used to confirm whether an account exists.
         if (user && !isDisallowedEmail(user.email)) {
-            const rawToken = crypto.randomBytes(32).toString("hex");
-
-            user.passwordResetToken = hashToken(rawToken);
-            user.passwordResetExpires = new Date(
-                Date.now() + PASSWORD_RESET_MINUTES * 60 * 1000
-            );
+            const rawToken = createPasswordResetToken(user);
 
             await user.save();
 
             resetEmail = {
                 to: user.email,
                 name: user.name,
-                resetUrl: `${getClientOrigin()}/reset-password/${rawToken}`,
+                resetUrl: buildPasswordResetUrl(rawToken),
             };
         }
 
@@ -1371,9 +1345,14 @@ exports.toggleBlockUser = async (req, res, next) => {
 
 exports.getAllUsers = async (req, res, next) => {
     try {
+        // The admin account is a management login, not a chat contact, so it
+        // stays out of everyone else's directory.
+        const adminEmails = getAdminEmails();
+
         const users = await User.find({
             _id: { $ne: req.user._id },
             needsUsername: { $ne: true },
+            ...(adminEmails.length > 0 ? { email: { $nin: adminEmails } } : {}),
         })
             .select(
                 "name username profilePicture bio isOnline lastSeen onlineStatus profilePhotoVisibility lastSeenVisibility blockedUsers blockedSnapshots"
